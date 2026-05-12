@@ -75,18 +75,38 @@ export default function ChatUI() {
   useEffect(() => {
     try {
       const key = "nuigurumi_session_id";
-      let id = localStorage.getItem(key);
-      if (!id) {
-        id = (crypto as any)?.randomUUID ? (crypto as any).randomUUID() : Date.now().toString();
-        localStorage.setItem(key, id);
+      const stored = localStorage.getItem(key);
+      if (stored && typeof stored === "string") {
+        setSessionId(stored);
+      } else {
+        const newId: string = (typeof crypto !== "undefined" && (crypto as any)?.randomUUID)
+          ? (crypto as any).randomUUID()
+          : Date.now().toString();
+        try {
+          localStorage.setItem(key, newId);
+        } catch (e) {
+          // ignore localStorage write errors
+        }
+        setSessionId(newId);
       }
-      setSessionId(id);
+    } catch (e) {
+      // ignore
+    }
+    // デバッグ: electronAPI が存在するかログ出力
+    try {
+      // @ts-ignore
+      console.log('[ChatUI] electronAPI available:', typeof (window as any)?.electronAPI !== 'undefined');
     } catch (e) {
       // ignore
     }
   }, []);
 
   const toggleListening = () => {
+    console.log('[ChatUI] toggleListening called, isListening=', isListening);
+    try {
+      // @ts-ignore
+      console.log('[ChatUI] electronAPI.requestMicrophone available:', typeof (window as any)?.electronAPI?.requestMicrophone === 'function');
+    } catch (e) {}
     if (isListening) {
       stopListening();
     } else {
@@ -96,7 +116,11 @@ export default function ChatUI() {
 
   const handleSendMessage = (e?: React.FormEvent, endAfterResponse: boolean = false) => {
     e?.preventDefault();
-    if (!inputText.trim()) return;
+    console.log('[ChatUI] handleSendMessage called, inputText=', inputText, 'sessionId=', sessionId);
+    if (!inputText.trim()) {
+      console.log('[ChatUI] send blocked: inputText empty or whitespace');
+      return;
+    }
 
     // ユーザーのメッセージを追加
     const newUserMsg: Message = {
@@ -140,38 +164,61 @@ export default function ChatUI() {
     (async () => {
       try {
         setLoading(true);
-        const resp = await fetch("/api/chat", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ message: textToSend, sessionId, agent: agentName }),
-        });
-
-        if (!resp.ok) {
-          // サーバーがエラーを返した場合は可能ならテキストで内容を取得して表示
-          const text = await resp.text().catch(() => "");
-          const errMsg = text || `HTTP ${resp.status}`;
-          const botMsg: Message = {
-            id: (Date.now() + 3).toString(),
-            role: "assistant",
-            content: `エラー: ${errMsg}`,
-          };
-          setMessages((prev) => [...prev, botMsg]);
-          return;
-        }
-
-        // 正常ステータスでも JSON パースが失敗する場合があるので安全に処理する
+        // Renderer -> main (Electron) 経由で送信できる場合は IPC を使う。
+        // ない場合は既存の Next API (/api/chat) にフォールバックする。
         let json: any = null;
-        try {
-          json = await resp.json();
-        } catch (parseErr) {
-          const text = await resp.text().catch(() => "");
-          const botMsg: Message = {
-            id: (Date.now() + 3).toString(),
-            role: "assistant",
-            content: text || "エラー: レスポンスの解析に失敗しました",
-          };
-          setMessages((prev) => [...prev, botMsg]);
-          return;
+        if (typeof (window as any)?.electronAPI?.sendChat === "function") {
+          console.log('[ChatUI] using electronAPI.sendChat (IPC)');
+          try {
+            json = await (window as any).electronAPI.sendChat({
+              message: textToSend,
+              sessionId,
+              agent: agentName,
+            });
+            console.log('[ChatUI] IPC sendChat response:', json);
+          } catch (ipcErr) {
+            console.error('[ChatUI] IPC sendChat error:', ipcErr);
+            const botMsg: Message = {
+              id: (Date.now() + 3).toString(),
+              role: "assistant",
+              content: `通信エラー(IPC): ${String(ipcErr)}`,
+            };
+            setMessages((prev) => [...prev, botMsg]);
+            return;
+          }
+        } else {
+          console.log('[ChatUI] electronAPI.sendChat not available, falling back to /api/chat');
+          const resp = await fetch("/api/chat", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ message: textToSend, sessionId, agent: agentName }),
+          });
+
+          if (!resp.ok) {
+            const text = await resp.text().catch(() => "");
+            const errMsg = text || `HTTP ${resp.status}`;
+            const botMsg: Message = {
+              id: (Date.now() + 3).toString(),
+              role: "assistant",
+              content: `エラー: ${errMsg}`,
+            };
+            setMessages((prev) => [...prev, botMsg]);
+            return;
+          }
+
+          try {
+            json = await resp.json();
+          } catch (parseErr) {
+            const text = await resp.text().catch(() => "");
+            console.error('[ChatUI] /api/chat parse error:', parseErr, 'text:', text);
+            const botMsg: Message = {
+              id: (Date.now() + 3).toString(),
+              role: "assistant",
+              content: text || "エラー: レスポンスの解析に失敗しました",
+            };
+            setMessages((prev) => [...prev, botMsg]);
+            return;
+          }
         }
 
         const botContent = json?.reply || (json?.error ? `エラー: ${json.error}` : "応答がありません");

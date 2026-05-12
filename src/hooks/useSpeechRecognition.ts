@@ -46,7 +46,40 @@ export function useSpeechRecognition() {
 
         recognitionRef.current.onerror = (event) => {
           console.error("Speech recognition error", event.error);
-          setIsListening(false);
+          // network エラーが出た場合はフォールバックで録音→Whisper に送る
+          if (String(event?.error).toLowerCase().includes('network')) {
+            (async () => {
+              try {
+                // 3秒録音して送信
+                if (typeof (window as any)?.electronAPI?.sendAudio === 'function') {
+                  const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                  const recorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
+                  const chunks: BlobPart[] = [];
+                  recorder.ondataavailable = (ev) => chunks.push(ev.data);
+                  recorder.start();
+                  await new Promise((res) => setTimeout(res, 3000));
+                  recorder.stop();
+                  await new Promise((res) => (recorder.onstop = res));
+                  stream.getTracks().forEach((t) => t.stop());
+                  const blob = new Blob(chunks, { type: 'audio/webm' });
+                  const arrayBuffer = await blob.arrayBuffer();
+                  // @ts-ignore
+                  const result = await (window as any).electronAPI.sendAudio(arrayBuffer, 'audio/webm');
+                  if (result && result.text) {
+                    setTranscript(String(result.text));
+                  } else {
+                    console.error('Transcription failed', result);
+                  }
+                }
+              } catch (e2) {
+                console.error('Fallback transcription error', e2);
+              } finally {
+                setIsListening(false);
+              }
+            })();
+          } else {
+            setIsListening(false);
+          }
         };
 
         recognitionRef.current.onend = () => {
@@ -67,14 +100,36 @@ export function useSpeechRecognition() {
 
   const startListening = () => {
     setTranscript("");
-    if (recognitionRef.current && !isListening) {
+    // マイク権限を事前に要求（Electron 環境では preload 経由のヘルパーを使う）
+    (async () => {
       try {
-        recognitionRef.current.start();
-        setIsListening(true);
+        if (typeof (window as any)?.electronAPI?.requestMicrophone === 'function') {
+          const r = await (window as any).electronAPI.requestMicrophone();
+          if (!r?.granted) {
+            console.warn('Microphone permission not granted', r?.error);
+            return;
+          }
+        } else if (typeof navigator !== 'undefined' && navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+          try {
+            await navigator.mediaDevices.getUserMedia({ audio: true });
+          } catch (e) {
+            console.warn('microphone permission denied', e);
+            return;
+          }
+        }
+
+        if (recognitionRef.current && !isListening) {
+          try {
+            recognitionRef.current.start();
+            setIsListening(true);
+          } catch (e) {
+            console.error('Speech recognition start error', e);
+          }
+        }
       } catch (e) {
-        console.error("Speech recognition start error", e);
+        console.error('Error while requesting microphone or starting recognition', e);
       }
-    }
+    })();
   };
 
   const stopListening = () => {

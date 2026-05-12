@@ -6,8 +6,14 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "build:web": "node ./scripts/clean-next.js && next build",
+    "export:web": "node ./scripts/clean-next.js && next build",
+    "electron:dev": "npm run build:web && electron .",
+    "electron:build": "npm run build:web && electron-builder",
+    "electron:rebuild": "electron-rebuild -f -w @supabase/supabase-js"
   },
+  "main": "electron/main.js",
   "dependencies": {
     "@supabase/supabase-js": "^2.104.0",
     "clsx": "^2.1.1",
@@ -26,6 +32,28 @@
     "eslint": "^9",
     "eslint-config-next": "16.2.4",
     "tailwindcss": "^4",
-    "typescript": "^5"
+    "typescript": "^5",
+    "electron": "^26.0.0",
+    "electron-builder": "^24.8.0",
+    "dotenv": "^16.0.0",
+    "electron-rebuild": "^3.2.9"
+  }
+  ,
+  "build": {
+    "appId": "com.example.nuigurumi",
+    "productName": "Nuigurumi Agent",
+    "files": [
+      "out/**/*",
+      "electron/**/*",
+      "package.json",
+      "node_modules/**/*"
+    ],
+    "directories": {
+      "buildResources": "assets"
+    },
+    "linux": {
+      "target": ["AppImage", "deb"],
+      "arch": ["armv7l", "arm64", "x64"]
+    }
   }
 }

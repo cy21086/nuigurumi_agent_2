@@ -8,6 +8,13 @@ const nextConfig: NextConfig & { turbopack?: { root?: string } } = {
   turbopack: {
     root: path.resolve(__dirname),
   },
+  // 静的エクスポートを明示する（next export による静的出力を有効にする）
+  output: 'export',
+  // Electron の file:// プロトコルで相対パスからアセットを読み込めるようにする
+  // これにより HTML が `./_next/static/...` のような相対パスを出力します
+  assetPrefix: './',
+  // basePath を空にして明示的にルートを使わない設定にする
+  basePath: '',
 };
 
 export default nextConfig;
